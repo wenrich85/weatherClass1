@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct WeatherClass1App: App {
@@ -13,5 +14,7 @@ struct WeatherClass1App: App {
         WindowGroup {
             WeatherView()
         }
+        .modelContainer(for: SavedLocation.self)
     }
 }
+

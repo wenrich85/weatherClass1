@@ -7,174 +7,119 @@
 
 import Foundation
 
-final class WeatherService{
+// MARK: - Weather Service
+
+final class WeatherService {
     
-    // This is the main function we will call from the ViewModel.
-    // It does TWO GET requests:
-    // 1) Geocoding: city name -> coordinates
-    // 2) Forecast: coordinates -> weather
+    // MARK: - Constants
     
-    
-    
-    func fetchCurrentWeather(forCity city:String) async throws -> (cityName:String , weather:CurrentWeather){
-        
-        let geocodingResult: GeoCodingResult = try await fetchCoordinates(forCity: city)
-        
-        let currentWeather: CurrentWeather = try await fetchWeather(latitude:geocodingResult.latitude,longitude:geocodingResult.longitude)
-        
-        return (geocodingResult.name,currentWeather)
-        
+    private enum APIEndpoint {
+        static let geocoding = "https://geocoding-api.open-meteo.com/v1/search"
+        static let forecast = "https://api.open-meteo.com/v1/forecast"
     }
     
+    // MARK: - Public Methods
     
-    // MARK: - Step 1: City -> Coordinates
-        private func fetchCoordinates(forCity city:String) async throws -> GeoCodingResult{
-        
-            //Base URL
-            var urlComponents: URLComponents? = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")
-
-            // IF THERE IS A URL  == NIL
-            if(urlComponents == nil){
-                throw NetworkError.invalidUrl
-            }
-            
-            
-            //ADD PARAMETERS TO OUR URL
-            urlComponents?.queryItems = [
-                URLQueryItem(name:"name",value:city ),
-                URLQueryItem(name:"count",value: "1"),
-                URLQueryItem(name:"language", value: "en"),
-                URLQueryItem(name: "format", value: "json")
-                
-            ]
-            
-            // Access the completed URL with Params
-            let url: URL? = urlComponents?.url
-            
-            // Error Handling
-            if url == nil {
-                throw NetworkError.invalidUrl
-            }
-
-            
-            // Fetch Information based on the prev URL
-            let data: Data = try await performGetRequest(url: url!)
-            
-            let decoder: JSONDecoder = JSONDecoder()
-            
-            // Parse JSON into a Model an array of GeocodingResult
-            let response: GeocodingResponse = try decoder.decode(GeocodingResponse.self, from: data)
-            
-            
-            if let results: [GeoCodingResult] = response.results {
-                if let firstResult: GeoCodingResult = results.first {
-                    return firstResult
-                }
-            }
-            
-            throw NetworkError.noResults
-            
-        
-        
-        }
+    /// Fetches current weather for a city name (geocodes first, then fetches weather)
+    func fetchCurrentWeather(forCity city: String) async throws -> (location: GeocodingResult, weather: CurrentWeather) {
+        let geocodingResult = try await fetchCoordinates(forCity: city)
+        let currentWeather = try await fetchWeather(latitude: geocodingResult.latitude, longitude: geocodingResult.longitude)
+        return (geocodingResult, currentWeather)
+    }
     
-    
-    // MARK: - Step 2: Coordinates -> Current Weather
-    private func fetchWeather(latitude:Double, longitude:Double) async throws -> CurrentWeather{
-        
-        var urlComponents: URLComponents? = URLComponents(string: "https://api.open-meteo.com/v1/forecast")
-
-        // IF THERE IS A URL  == NIL
-        if(urlComponents == nil){
+    /// Fetches current weather for known coordinates (used for saved locations)
+    func fetchWeather(latitude: Double, longitude: Double) async throws -> CurrentWeather {
+        guard var urlComponents = URLComponents(string: APIEndpoint.forecast) else {
             throw NetworkError.invalidUrl
         }
         
-        
-        urlComponents?.queryItems = [
+        urlComponents.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),
             URLQueryItem(name: "longitude", value: String(longitude)),
             URLQueryItem(name: "current_weather", value: "true"),
-            URLQueryItem(name: "timezone", value: "auto"),
-
-
+            URLQueryItem(name: "timezone", value: "auto")
         ]
         
-        let url: URL? = urlComponents?.url
-
-        if url == nil {
+        guard let url = urlComponents.url else {
             throw NetworkError.invalidUrl
         }
         
-    
-        let data:Data = try await performGetRequest(url: url!)
-        
-        let decoder: JSONDecoder = JSONDecoder()
-        let response: ForecastResponse = try decoder.decode(ForecastResponse.self, from: data)
+        let data = try await performGetRequest(url: url)
+        let response = try JSONDecoder().decode(ForecastResponse.self, from: data)
         
         return response.current_weather
-        
     }
     
-    
-    
-    // MARK: - The actual GET request (URLSession) CORE FUNCTION
-    
-    private func performGetRequest(url: URL) async throws -> Data {
-        
-        // STEP 1: Create a URLSession (the tool that makes network requests)
-        let session: URLSession = URLSession.shared
-
-        // STEP 2: Send a GET request to the URL and wait for the server to respond
-        // - "try" because networking can fail
-        // - "await" because it takes time
-        let results: (Data,URLResponse) = try await session.data(from: url)
-        
-        // STEP 3: Split the result into:
-        // - data: the actual content (usually JSON)
-        // - response: information about the request (status code, headers, etc.)
-        let data: Data = results.0
-        let response: URLResponse = results.1
-        
-        // STEP 4: We want an HTTP response so we can read the status code (200, 404, 500...)
-        // If this is not an HTTP response, something is wrong.
-        
-        if let httpResponse: HTTPURLResponse = response as? HTTPURLResponse{
-            
-            // STEP 5: Get the status code from the response
-            let statusCode: Int = httpResponse.statusCode
-            
-            // STEP 6: Only treat 200–299 as success
-            if statusCode < 200 || statusCode > 299{
-                throw NetworkError.badStatusCode(statusCode: statusCode)
-            }
-            
-            // STEP 7: If everything is successful, return the data
-            return data
-            
+    /// Searches for cities matching the query (returns multiple results for selection)
+    func searchCities(query: String, count: Int = 5) async throws -> [GeocodingResult] {
+        guard var urlComponents = URLComponents(string: APIEndpoint.geocoding) else {
+            throw NetworkError.invalidUrl
         }
         
-        // EXTRA:
-        // If we could not convert the response to HTTPURLResponse, it is not valid for our API use case
-        throw NetworkError.invalidResponse
+        urlComponents.queryItems = [
+            URLQueryItem(name: "name", value: query),
+            URLQueryItem(name: "count", value: String(count)),
+            URLQueryItem(name: "language", value: "en"),
+            URLQueryItem(name: "format", value: "json")
+        ]
         
+        guard let url = urlComponents.url else {
+            throw NetworkError.invalidUrl
+        }
         
+        let data = try await performGetRequest(url: url)
+        let response = try JSONDecoder().decode(GeocodingResponse.self, from: data)
+        
+        return response.results ?? []
     }
     
+    // MARK: - Private Methods
     
+    /// Fetches coordinates for a city name (returns first result)
+    private func fetchCoordinates(forCity city: String) async throws -> GeocodingResult {
+        let results = try await searchCities(query: city, count: 1)
+        
+        guard let firstResult = results.first else {
+            throw NetworkError.noResults
+        }
+        
+        return firstResult
+    }
     
-    
-    
-    
-    
-    
-    
+    /// Performs a GET request and returns the response data
+    private func performGetRequest(url: URL) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NetworkError.invalidResponse
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw NetworkError.badStatusCode(statusCode: httpResponse.statusCode)
+        }
+        
+        return data
+    }
 }
 
-// MARK: - Simple errors
+// MARK: - Network Errors
 
-enum NetworkError:Error {
+enum NetworkError: LocalizedError {
     case invalidUrl
     case invalidResponse
-    case badStatusCode(statusCode:Int)
+    case badStatusCode(statusCode: Int)
     case noResults
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidUrl:
+            return "Invalid URL"
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .badStatusCode(let code):
+            return "Server returned error code: \(code)"
+        case .noResults:
+            return "No results found"
+        }
+    }
 }

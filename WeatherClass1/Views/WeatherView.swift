@@ -6,57 +6,116 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct WeatherView: View {
-
-    @StateObject private var weatherViewModel: WeatherViewModel = WeatherViewModel()
-
+    
+    // MARK: - Environment & State
+    
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \SavedLocation.createdAt) private var savedLocations: [SavedLocation]
+    @StateObject private var viewModel = WeatherViewModel()
+    
+    // MARK: - Body
+    
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-
-                TextField("Enter a city ", text: $weatherViewModel.searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.words)
-
-                // IMPORTANT PART
-                Button("Get Weather") {
-                    Task {
-                        await weatherViewModel.searchWeather()
-                    }
+            Group {
+                if savedLocations.isEmpty {
+                    emptyStateView
+                } else {
+                    locationListView
                 }
-                .buttonStyle(.borderedProminent)
-
-                if weatherViewModel.isLoading {
-                    ProgressView("Loading…")
+            }
+            .navigationTitle("Weather")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    addButton
                 }
-
-                if !weatherViewModel.errorMessage.isEmpty {
-                    Text(weatherViewModel.errorMessage)
-                        .foregroundStyle(.red)
+            }
+            .sheet(isPresented: $viewModel.showingAddLocation) {
+                AddLocationView(viewModel: viewModel, existingCount: savedLocations.count)
+            }
+            .refreshable {
+                await viewModel.refreshAllLocations(savedLocations)
+            }
+            .task {
+                // Refresh weather on appear if we have locations
+                if !savedLocations.isEmpty {
+                    await viewModel.refreshAllLocations(savedLocations)
                 }
-
-                if !weatherViewModel.cityName.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(weatherViewModel.cityName)
-                            .font(.title2)
-                            .bold()
-
-                        Text(weatherViewModel.temperature)
-                        Text(weatherViewModel.windText)
-                        Text(weatherViewModel.timeText)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+        }
+    }
+    
+    // MARK: - Subviews
+    
+    private var emptyStateView: some View {
+        ContentUnavailableView {
+            Label("No Locations", systemImage: "cloud.sun")
+        } description: {
+            Text("Add up to \(WeatherViewModel.maxLocations) locations to track their weather.")
+        } actions: {
+            Button("Add Location") {
+                viewModel.showingAddLocation = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+    
+    private var locationListView: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(savedLocations) { location in
+                    LocationCardView(location: location, viewModel: viewModel)
+                        .contextMenu {
+                            contextMenuItems(for: location)
+                        }
                 }
-
-                Spacer()
             }
             .padding()
-            .navigationTitle("Weather")
+        }
+        .overlay {
+            if viewModel.isRefreshing {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.ultraThinMaterial)
+            }
+        }
+    }
+    
+    private var addButton: some View {
+        Button {
+            viewModel.showingAddLocation = true
+        } label: {
+            Image(systemName: "plus")
+        }
+        .disabled(!viewModel.canAddLocation(currentCount: savedLocations.count))
+    }
+    
+    @ViewBuilder
+    private func contextMenuItems(for location: SavedLocation) -> some View {
+        Button {
+            Task {
+                await viewModel.refreshWeather(for: location)
+            }
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        
+        Button {
+            viewModel.setCurrentAsBaseline(for: location)
+        } label: {
+            Label("Set Current as Baseline", systemImage: "flag")
+        }
+        
+        Divider()
+        
+        Button(role: .destructive) {
+            viewModel.deleteLocation(location, context: modelContext)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 }
